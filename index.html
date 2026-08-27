@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root{
     --ink:#262420;
@@ -428,10 +429,39 @@
     "Feiertag":"#B65A47"
   };
 
+  // ---------- Supabase ----------
+  const SUPABASE_URL = "https://arvdvabfhgyprqgowyzg.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_aJDuFgefRpUwrf8LokcAqA_o1wUDqS9";
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
   let currentIdx = 0;
-  // In-memory Speicher: { "2027-05-14": [ {id, title, time, category, notes} ] }
+  // Lokaler Cache, aus der Datenbank geladen: { "2027-05-14": [ {id, title, time, category, notes} ] }
   let events = {};
   let activeDayKey = null;
+
+  async function loadEvents(){
+    const { data, error } = await sb
+      .from('events')
+      .select('*')
+      .gte('event_date', '2027-05-01')
+      .lte('event_date', '2027-09-30');
+    if(error){
+      console.error('Fehler beim Laden der Termine:', error);
+      return;
+    }
+    events = {};
+    data.forEach(row => {
+      const key = row.event_date;
+      if(!events[key]) events[key] = [];
+      events[key].push({
+        id: row.id,
+        title: row.title,
+        time: row.event_time ? row.event_time.slice(0,5) : '',
+        category: row.category,
+        notes: row.notes || ''
+      });
+    });
+  }
 
   const grid = document.getElementById('grid');
   const monthTitle = document.getElementById('monthTitle');
@@ -615,7 +645,9 @@
     document.getElementById('notes').value = ev.notes || '';
   }
 
-  function deleteEvent(id){
+  async function deleteEvent(id){
+    const { error } = await sb.from('events').delete().eq('id', id);
+    if(error){ console.error('Fehler beim Löschen:', error); return; }
     events[activeDayKey] = (events[activeDayKey]||[]).filter(e=> e.id !== id);
     renderExistingList();
     buildGrid();
@@ -627,7 +659,7 @@
     return div.innerHTML;
   }
 
-  eventForm.addEventListener('submit', function(e){
+  eventForm.addEventListener('submit', async function(e){
     e.preventDefault();
     const editId = document.getElementById('editId').value;
     const title = document.getElementById('title').value.trim();
@@ -636,24 +668,39 @@
     const category = document.getElementById('category').value;
     const notes = document.getElementById('notes').value.trim();
 
+    const saveBtn = document.getElementById('saveBtn');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Speichert …';
+
     if(!events[activeDayKey]) events[activeDayKey] = [];
 
     if(editId){
+      const { error } = await sb.from('events').update({
+        title, event_time: time || null, category, notes
+      }).eq('id', editId);
+      if(error){ console.error('Fehler beim Speichern:', error); saveBtn.disabled=false; saveBtn.textContent='Speichern'; return; }
       const ev = events[activeDayKey].find(e=> e.id === editId);
       if(ev){ ev.title=title; ev.time=time; ev.category=category; ev.notes=notes; }
     } else {
-      events[activeDayKey].push({
-        id: 'ev_' + Date.now() + '_' + Math.floor(Math.random()*1000),
-        title, time, category, notes
-      });
+      const { data, error } = await sb.from('events').insert({
+        event_date: activeDayKey, title, event_time: time || null, category, notes
+      }).select().single();
+      if(error){ console.error('Fehler beim Speichern:', error); saveBtn.disabled=false; saveBtn.textContent='Speichern'; return; }
+      events[activeDayKey].push({ id: data.id, title, time, category, notes });
     }
+
+    saveBtn.disabled = false;
+    saveBtn.textContent = 'Speichern';
     resetForm();
     renderExistingList();
     buildGrid();
   });
 
   // ---------- Start ----------
-  render();
+  (async function init(){
+    await loadEvents();
+    render();
+  })();
 })();
 </script>
 </body>
