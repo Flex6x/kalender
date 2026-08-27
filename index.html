@@ -276,7 +276,7 @@
   .existing-item button:hover{ background:#fff; color:#b23b3b; }
 
   label{ font-size:12px; font-weight:600; color:var(--ink-soft); display:block; margin:14px 0 6px; }
-  input[type=text], input[type=time], textarea, select{
+  input[type=text], input[type=time], input[type=date], textarea, select{
     width:100%;
     border:1px solid var(--line);
     border-radius:9px;
@@ -293,6 +293,8 @@
 
   .row2{ display:flex; gap:10px; }
   .row2 > div{ flex:1; }
+
+  .chip.chip-cont{ opacity:.75; font-style:italic; }
 
   .swatches{ display:flex; gap:8px; margin-top:6px; }
   .swatch{
@@ -324,6 +326,52 @@
     font-size:12px;
     color:var(--muted);
     text-align:center;
+  }
+
+  /* ---------- Notizzettel ---------- */
+  .notepad-card{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:22px 24px;
+    margin-top:40px;
+    box-shadow:var(--shadow);
+  }
+  .notepad-head{
+    display:flex; align-items:baseline; justify-content:space-between;
+    gap:12px; margin-bottom:4px; flex-wrap:wrap;
+  }
+  .notepad-head h2{
+    font-family:'Fraunces', serif;
+    font-weight:500;
+    font-size:19px;
+    margin:0;
+  }
+  .notepad-status{
+    font-size:11.5px;
+    color:var(--ink-soft);
+  }
+  .notepad-sub{
+    font-size:12.5px;
+    color:var(--ink-soft);
+    margin:0 0 14px;
+  }
+  #notepadArea{
+    width:100%;
+    min-height:140px;
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:12px 14px;
+    font-family:inherit;
+    font-size:14px;
+    line-height:1.55;
+    color:var(--ink);
+    background:var(--paper);
+    resize:vertical;
+  }
+  #notepadArea:focus{ outline:none; border-color:var(--accent); }
+  .notepad-actions{
+    display:flex; justify-content:flex-end; margin-top:10px;
   }
 
   @media (max-width:640px){
@@ -369,6 +417,18 @@
   </div>
   <div class="grid" id="grid"></div>
 
+  <div class="notepad-card">
+    <div class="notepad-head">
+      <h2>Notizzettel</h2>
+      <span class="notepad-status" id="notepadStatus"></span>
+    </div>
+    <p class="notepad-sub">Allgemeine Notizen für alle – wird zusammen mit dem Kalender gespeichert.</p>
+    <textarea id="notepadArea" placeholder="Hier ist Platz für gemeinsame Notizen, Ideen, Einkaufslisten …"></textarea>
+    <div class="notepad-actions">
+      <button type="button" class="btn btn-primary" id="notepadSaveBtn">Speichern</button>
+    </div>
+  </div>
+
   <footer class="note">Klicke auf einen Tag, um Termine hinzuzufügen oder zu bearbeiten.</footer>
 </div>
 
@@ -376,14 +436,25 @@
   <div class="modal">
     <button class="close-x" id="closeX">✕</button>
     <h2 id="modalDate">1. Mai 2027</h2>
-    <p class="sub">Termine für diesen Tag</p>
+    <p class="sub">Termine für diesen Tag – ein Termin kann auch mehrere Tage dauern</p>
 
     <div class="existing-list" id="existingList"></div>
 
     <form id="eventForm">
       <input type="hidden" id="editId">
       <label for="title">Titel</label>
-      <input type="text" id="title" placeholder="z. B. Zahnarzttermin" required>
+      <input type="text" id="title" placeholder="z. B. Urlaub an der Ostsee" required>
+
+      <div class="row2">
+        <div>
+          <label for="dateFrom">Von</label>
+          <input type="date" id="dateFrom" min="2027-05-01" max="2027-09-30" required>
+        </div>
+        <div>
+          <label for="dateTo">Bis</label>
+          <input type="date" id="dateTo" min="2027-05-01" max="2027-09-30" required>
+        </div>
+      </div>
 
       <div class="row2">
         <div>
@@ -443,23 +514,31 @@
     const { data, error } = await sb
       .from('events')
       .select('*')
-      .gte('event_date', '2027-05-01')
-      .lte('event_date', '2027-09-30');
+      .lte('event_date', '2027-09-30')
+      .gte('event_end_date', '2027-05-01');
     if(error){
       console.error('Fehler beim Laden der Termine:', error);
       return;
     }
     events = {};
     data.forEach(row => {
-      const key = row.event_date;
-      if(!events[key]) events[key] = [];
-      events[key].push({
+      const entry = {
         id: row.id,
         title: row.title,
         time: row.event_time ? row.event_time.slice(0,5) : '',
         category: row.category,
-        notes: row.notes || ''
-      });
+        notes: row.notes || '',
+        startDate: row.event_date,
+        endDate: row.event_end_date
+      };
+      let cursor = new Date(row.event_date + 'T00:00:00');
+      const end = new Date(row.event_end_date + 'T00:00:00');
+      while(cursor <= end){
+        const key = `${cursor.getFullYear()}-${pad(cursor.getMonth()+1)}-${pad(cursor.getDate())}`;
+        if(!events[key]) events[key] = [];
+        events[key].push(entry);
+        cursor.setDate(cursor.getDate() + 1);
+      }
     });
   }
 
@@ -540,9 +619,12 @@
         const dayEvents = (events[k] || []).slice().sort((a,b)=> (a.time||'99').localeCompare(b.time||'99'));
         dayEvents.slice(0,3).forEach(ev=>{
           const chip = document.createElement('div');
-          chip.className = 'chip';
+          const isStart = ev.startDate === k;
+          const multiDay = ev.startDate !== ev.endDate;
+          chip.className = 'chip' + (multiDay && !isStart ? ' chip-cont' : '');
           chip.style.background = catColors[ev.category] || 'var(--accent)';
-          chip.textContent = (ev.time ? ev.time + ' · ' : '') + ev.title;
+          const label = (isStart && ev.time) ? ev.time + ' · ' : (isStart ? '' : '↳ ');
+          chip.textContent = label + ev.title + (multiDay && isStart ? ' →' : '');
           el.appendChild(chip);
         });
         if(dayEvents.length > 3){
@@ -604,9 +686,16 @@
   function resetForm(){
     document.getElementById('editId').value = '';
     document.getElementById('title').value = '';
+    document.getElementById('dateFrom').value = activeDayKey;
+    document.getElementById('dateTo').value = activeDayKey;
     document.getElementById('time').value = '';
     document.getElementById('category').value = 'Persönlich';
     document.getElementById('notes').value = '';
+  }
+
+  function formatShort(dateStr){
+    const [y,m,d] = dateStr.split('-');
+    return `${parseInt(d,10)}.${parseInt(m,10)}.`;
   }
 
   function renderExistingList(){
@@ -616,11 +705,13 @@
     list.forEach(ev=>{
       const item = document.createElement('div');
       item.className = 'existing-item';
+      const multiDay = ev.startDate !== ev.endDate;
+      const rangeLabel = multiDay ? `${formatShort(ev.startDate)}–${formatShort(ev.endDate)} · ` : (ev.time ? ev.time + ' · ' : '');
       item.innerHTML = `
         <div class="dot" style="background:${catColors[ev.category]||'#999'}"></div>
         <div class="info">
           <b>${escapeHtml(ev.title)}</b>
-          <small>${ev.time ? ev.time + ' · ' : ''}${escapeHtml(ev.category)}</small>
+          <small>${rangeLabel}${escapeHtml(ev.category)}</small>
         </div>
       `;
       const editBtn = document.createElement('button');
@@ -640,6 +731,8 @@
   function fillFormForEdit(ev){
     document.getElementById('editId').value = ev.id;
     document.getElementById('title').value = ev.title;
+    document.getElementById('dateFrom').value = ev.startDate;
+    document.getElementById('dateTo').value = ev.endDate;
     document.getElementById('time').value = ev.time || '';
     document.getElementById('category').value = ev.category;
     document.getElementById('notes').value = ev.notes || '';
@@ -648,7 +741,7 @@
   async function deleteEvent(id){
     const { error } = await sb.from('events').delete().eq('id', id);
     if(error){ console.error('Fehler beim Löschen:', error); return; }
-    events[activeDayKey] = (events[activeDayKey]||[]).filter(e=> e.id !== id);
+    await loadEvents();
     renderExistingList();
     buildGrid();
   }
@@ -664,6 +757,10 @@
     const editId = document.getElementById('editId').value;
     const title = document.getElementById('title').value.trim();
     if(!title) return;
+    let dateFrom = document.getElementById('dateFrom').value;
+    let dateTo = document.getElementById('dateTo').value;
+    if(!dateFrom || !dateTo) return;
+    if(dateTo < dateFrom){ [dateFrom, dateTo] = [dateTo, dateFrom]; }
     const time = document.getElementById('time').value;
     const category = document.getElementById('category').value;
     const notes = document.getElementById('notes').value.trim();
@@ -672,23 +769,19 @@
     saveBtn.disabled = true;
     saveBtn.textContent = 'Speichert …';
 
-    if(!events[activeDayKey]) events[activeDayKey] = [];
-
     if(editId){
       const { error } = await sb.from('events').update({
-        title, event_time: time || null, category, notes
+        title, event_date: dateFrom, event_end_date: dateTo, event_time: time || null, category, notes
       }).eq('id', editId);
       if(error){ console.error('Fehler beim Speichern:', error); saveBtn.disabled=false; saveBtn.textContent='Speichern'; return; }
-      const ev = events[activeDayKey].find(e=> e.id === editId);
-      if(ev){ ev.title=title; ev.time=time; ev.category=category; ev.notes=notes; }
     } else {
-      const { data, error } = await sb.from('events').insert({
-        event_date: activeDayKey, title, event_time: time || null, category, notes
-      }).select().single();
+      const { error } = await sb.from('events').insert({
+        event_date: dateFrom, event_end_date: dateTo, title, event_time: time || null, category, notes
+      });
       if(error){ console.error('Fehler beim Speichern:', error); saveBtn.disabled=false; saveBtn.textContent='Speichern'; return; }
-      events[activeDayKey].push({ id: data.id, title, time, category, notes });
     }
 
+    await loadEvents();
     saveBtn.disabled = false;
     saveBtn.textContent = 'Speichern';
     resetForm();
@@ -696,9 +789,36 @@
     buildGrid();
   });
 
+  // ---------- Notizzettel ----------
+  const notepadArea = document.getElementById('notepadArea');
+  const notepadStatus = document.getElementById('notepadStatus');
+  const notepadSaveBtn = document.getElementById('notepadSaveBtn');
+
+  async function loadNotepad(){
+    const { data, error } = await sb.from('notepad').select('content, updated_at').eq('id', 1).single();
+    if(error){ console.error('Fehler beim Laden des Notizzettels:', error); return; }
+    notepadArea.value = data.content || '';
+    if(data.updated_at){
+      notepadStatus.textContent = 'Zuletzt gespeichert: ' + new Date(data.updated_at).toLocaleString('de-DE');
+    }
+  }
+
+  async function saveNotepad(){
+    notepadSaveBtn.disabled = true;
+    notepadSaveBtn.textContent = 'Speichert …';
+    const { error } = await sb.from('notepad')
+      .update({ content: notepadArea.value, updated_at: new Date().toISOString() })
+      .eq('id', 1);
+    notepadSaveBtn.disabled = false;
+    notepadSaveBtn.textContent = 'Speichern';
+    if(error){ console.error('Fehler beim Speichern des Notizzettels:', error); return; }
+    notepadStatus.textContent = 'Zuletzt gespeichert: ' + new Date().toLocaleString('de-DE');
+  }
+  notepadSaveBtn.addEventListener('click', saveNotepad);
+
   // ---------- Start ----------
   (async function init(){
-    await loadEvents();
+    await Promise.all([loadEvents(), loadNotepad()]);
     render();
   })();
 })();
